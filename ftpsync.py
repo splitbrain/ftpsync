@@ -14,15 +14,43 @@ class Syncer:
     def __init__(self, config):
         self.config = config
         self.ftp = ftplib.FTP(config['REMOTE']['host'])
-
         self.TIMEFILE = ".ftpsync.temporary.timefile"
 
+        self.remote_testfeatures()
+
+        # login
         try:
             ok = self.ftp.login(config['REMOTE']['user'], config['REMOTE']['pass'])
             print(ok)
         except ftplib.error_perm as e:
             print(e)
             sys.exit(1)
+
+    def remote_testfeatures(self):
+        try:
+            features = self.ftp.sendcmd('FEAT')
+        except ftplib.error_perm as e:
+            print("FTP does not support any extended features. "+e)
+            sys.exit(1)
+
+        self.remote_features = {
+            'MLST': False,
+            'MLSD': False,
+            'MDTM': False,
+            'SIZE': False
+        }
+
+        for line in features.split("\n"):
+            print(line)
+            if(line[1:5] == 'MLST'):
+                self.remote_features['MLST'] = True
+            if(line[1:5] == 'MLSD'):
+                self.remote_features['MLSD'] = True
+            if(line[1:5] == 'MDTM'):
+                self.remote_features['MDTM'] = True
+            if(line[1:5] == 'SIZE'):
+                self.remote_features['SIZE'] = True
+
 
     def remote_time(self):
         """ return the remote time
@@ -53,14 +81,41 @@ class Syncer:
         ls = []
         try:
             self.ftp.cwd(posixpath.join(base,dir))
-            self.ftp.retrlines('MLSD', ls.append)
+            # get a directory listing based on capabilities
+            if(self.remote_features['MLSD']):
+                self.ftp.retrlines('MLSD', ls.append)
+            else:
+            #elif(self.remote_features['MLST']):
+                self.ftp.retrlines('NLST', ls.append)
+            #else:
+            #    self.ftp.retrlines('LIST', ls.append)
         except ftplib.error_perm as e:
             print("Failed to retrieve remote file list: %s" % e)
             sys.exit(1)
 
         items = []
         for line in ls:
-            item = self.parse_ftpls(line,dir)
+            if(self.remote_features['MLSD']):
+                # each line has all info already
+                item = self.parse_ftpls(line,dir)
+            elif(self.remote_features['MLST']):
+                # fetch stat info for each line
+                line = self.ftp.sendcmd('MLST '+line)
+                item = self.parse_ftpls(line,dir)
+            else:
+                try:
+                    modt = self.ftp.sendcmd('MDTM ../'+line)
+#                    size = self.ftp.sendcmd('SIZE '+line)
+                    print ("xxxx "+ line +","+modt)
+                except ftplib.error_perm as e:
+                    print("fail for "+line)
+
+                #fixme parse LIST output
+                item = {}
+
+        sys.exit(1)
+        """
+            # now handle directories and files
             if(item['type'] == 'dir'):
                 items.append(item)
                 items += self.remote_filelist(base, item['file'])
@@ -69,7 +124,7 @@ class Syncer:
             else:
                 # others are parent and current dir
                 None
-
+        """
         return items
 
     def local_filelist(self, base, dir):
